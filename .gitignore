@@ -6,6 +6,7 @@ gh-pages
 .terraform
 *.tfstate*
 terraform.tfvars
+.terraform*
 
 # Garbage
 *.lerna_backup
