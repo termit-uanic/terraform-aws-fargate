@@ -1,12 +1,3 @@
-terraform {
-  required_version = "~> 0.11.11"
-}
-
-provider "aws" {
-  version = "~> 1.54.0"
-  region  = "us-east-1"
-  profile = "playground"
-}
 
 module "fargate" {
   source = "../../"

@@ -1,49 +1,42 @@
 # Main Module file
 
 terraform {
-  required_version = ">= 0.12"
-
   required_providers {
-    aws = ">= 2.12.0"
+    random   = "~> 2.1"
+    template = "~> 2.1"
   }
 }
 
-provider "random" {
-  version = "~> 2.1"
-}
 
-provider "template" {
-  version = "~> 2.1"
-}
 
 # VPC CONFIGURATION
 
 locals {
-  vpc_id = ! var.vpc_create ? var.vpc_external_id : module.vpc.vpc_id
+  vpc_id = !var.vpc_create ? var.vpc_external_id : module.vpc.vpc_id
 
   vpc_public_subnets = (
-    length(var.vpc_public_subnets) > 0 || ! var.vpc_create ?
+    length(var.vpc_public_subnets) > 0 || !var.vpc_create ?
     var.vpc_public_subnets :
-    list(
+    tolist([
       cidrsubnet(var.vpc_cidr, 8, 1),
       cidrsubnet(var.vpc_cidr, 8, 2),
       cidrsubnet(var.vpc_cidr, 8, 3)
-    )
+    ])
   )
 
   vpc_private_subnets = (
-    length(var.vpc_private_subnets) > 0 || ! var.vpc_create ?
+    length(var.vpc_private_subnets) > 0 || !var.vpc_create ?
     var.vpc_private_subnets :
-    list(
+    tolist([
       cidrsubnet(var.vpc_cidr, 8, 101),
       cidrsubnet(var.vpc_cidr, 8, 102),
       cidrsubnet(var.vpc_cidr, 8, 103)
-    )
+    ])
   )
 
-  vpc_private_subnets_ids = ! var.vpc_create ? var.vpc_external_private_subnets_ids : module.vpc.private_subnets
+  vpc_private_subnets_ids = !var.vpc_create ? var.vpc_external_private_subnets_ids : module.vpc.private_subnets
 
-  vpc_public_subnets_ids = ! var.vpc_create ? var.vpc_external_public_subnets_ids : module.vpc.public_subnets
+  vpc_public_subnets_ids = !var.vpc_create ? var.vpc_external_public_subnets_ids : module.vpc.public_subnets
 
   services       = [for k, v in var.services : merge({ "name" : k }, v)]
   services_count = length(var.services)
@@ -396,7 +389,7 @@ resource "aws_ecs_service" "this" {
     ]
 
     subnets          = var.vpc_create_nat ? local.vpc_private_subnets_ids : local.vpc_public_subnets_ids
-    assign_public_ip = ! var.vpc_create_nat
+    assign_public_ip = !var.vpc_create_nat
   }
 
   load_balancer {
