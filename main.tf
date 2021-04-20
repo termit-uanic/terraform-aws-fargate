@@ -43,6 +43,7 @@ locals {
 
   # ⚠️ remove when https://github.com/hashicorp/terraform/issues/22560 gets fixed
   services_with_sd = [for s in local.services : s if lookup(s, "service_discovery_enabled", false)]
+  services_with_alb = [for s in local.services : s if lookup(s, "service_alb_enabled", false)]
 }
 
 data "aws_availability_zones" "this" {}
@@ -57,7 +58,7 @@ module "vpc" {
 
   create_vpc = var.vpc_create
 
-  name = "${var.name}-${terraform.workspace}-vpc"
+  name = "${var.name}-vpc"
   cidr = var.vpc_cidr
   azs  = data.aws_availability_zones.this.names
 
@@ -80,7 +81,7 @@ module "vpc" {
 resource "aws_ecr_repository" "this" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name = "${local.services[count.index].name}-${terraform.workspace}"
+  name = local.services[count.index].name
 }
 
 data "template_file" "ecr-lifecycle" {
@@ -104,18 +105,18 @@ resource "aws_ecr_lifecycle_policy" "this" {
 # ECS CLUSTER
 
 resource "aws_ecs_cluster" "this" {
-  name = "${var.name}-${terraform.workspace}-cluster"
+  name = "${var.name}-cluster"
 }
 
 # ECS TASKS DEFINITIONS
 
 resource "aws_iam_role" "tasks_execution" {
-  name               = "${var.name}-${terraform.workspace}-task-execution-role"
+  name               = "${var.name}-task-execution-role"
   assume_role_policy = file("${path.module}/policies/ecs-task-execution-role.json")
 }
 
 resource "aws_iam_policy" "tasks_execution" {
-  name = "${var.name}-${terraform.workspace}-task-execution-policy"
+  name = "${var.name}-task-execution-policy"
 
   policy = file("${path.module}/policies/ecs-task-execution-role-policy.json")
 }
@@ -138,7 +139,7 @@ data "template_file" "tasks_execution_ssm" {
 resource "aws_iam_policy" "tasks_execution_ssm" {
   count = var.ssm_allowed_parameters != "" ? 1 : 0
 
-  name = "${var.name}-${terraform.workspace}-task-execution-ssm-policy"
+  name = "${var.name}-task-execution-ssm-policy"
 
   policy = data.template_file.tasks_execution_ssm[count.index].rendered
 }
@@ -167,7 +168,7 @@ data "template_file" "tasks" {
 resource "aws_ecs_task_definition" "this" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  family                   = "${var.name}-${terraform.workspace}-${local.services[count.index].name}"
+  family                   = "${var.name}-${local.services[count.index].name}"
   container_definitions    = data.template_file.tasks[count.index].rendered
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -198,7 +199,7 @@ resource "aws_cloudwatch_log_group" "this" {
 
 resource "aws_security_group" "web" {
   vpc_id = local.vpc_id
-  name   = "${var.name}-${terraform.workspace}-web-sg"
+  name   = "${var.name}-web-sg"
 
   ingress {
     from_port   = 80
@@ -226,7 +227,7 @@ resource "aws_security_group" "services" {
   count = local.services_count > 0 ? local.services_count : 0
 
   vpc_id = local.vpc_id
-  name   = "${var.name}-${local.services[count.index].name}-${terraform.workspace}-services-sg"
+  name   = "${var.name}-${local.services[count.index].name}-services-sg"
 
   ingress {
     from_port       = local.services[count.index].container_port
@@ -248,7 +249,7 @@ resource "aws_security_group" "services_dynamic" {
   count = local.services_count > 0 ? local.services_count : 0
 
   vpc_id = local.vpc_id
-  name   = "${var.name}-${local.services[count.index].name}-${terraform.workspace}-services-sg-dynamic"
+  name   = "${var.name}-${local.services[count.index].name}-services-sg-dynamic"
 
   egress {
     from_port   = 0
@@ -267,7 +268,7 @@ resource "aws_security_group" "services_dynamic" {
       to_port   = local.services[count.index].container_port
       protocol  = "tcp"
       security_groups = [for s in aws_security_group.services : s.id
-      if lookup(s, "name", "") == "${var.name}-${ingress.value}-${terraform.workspace}-services-sg"]
+      if lookup(s, "name", "") == "${var.name}-${ingress.value}-services-sg"]
     }
   }
 }
@@ -275,7 +276,8 @@ resource "aws_security_group" "services_dynamic" {
 # ALBs
 
 resource "random_id" "target_group_sufix" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   keepers = {
     container_port = local.services[count.index].container_port
@@ -285,7 +287,8 @@ resource "random_id" "target_group_sufix" {
 }
 
 resource "aws_lb_target_group" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   name        = "${var.name}-${local.services[count.index].name}-${random_id.target_group_sufix[count.index].hex}"
   port        = random_id.target_group_sufix[count.index].keepers.container_port
@@ -307,15 +310,17 @@ resource "aws_lb_target_group" "this" {
 }
 
 resource "aws_lb" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
-  name            = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-alb"
+  name            = "${var.name}-${local.services[count.index].name}-alb"
   subnets         = slice(local.vpc_public_subnets_ids, 0, min(length(data.aws_availability_zones.this.names), length(local.vpc_public_subnets_ids)))
   security_groups = [aws_security_group.web.id]
 }
 
 resource "aws_lb_listener" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  //count = local.services_count > 0 ? local.services_count : 0
 
   load_balancer_arn = aws_lb.this[count.index].arn
   port              = lookup(local.services[count.index], "acm_certificate_arn", "") != "" ? 443 : 80
@@ -335,7 +340,7 @@ resource "aws_lb_listener" "this" {
 resource "aws_service_discovery_private_dns_namespace" "this" {
   count = length([for s in local.services : s if lookup(s, "service_discovery_enabled", false)]) > 0 ? 1 : 0
 
-  name        = "${var.name}.${terraform.workspace}.local"
+  name        = "${var.name}.local"
   description = "${var.name} private dns namespace"
   vpc         = local.vpc_id
 }
@@ -367,7 +372,8 @@ resource "aws_service_discovery_service" "this" {
 # ECS SERVICES
 
 resource "aws_ecs_service" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   name          = local.services[count.index].name
   cluster       = aws_ecs_cluster.this.name
@@ -414,12 +420,12 @@ resource "aws_ecs_service" "this" {
 }
 
 resource "aws_iam_role" "autoscaling" {
-  name               = "${var.name}-${terraform.workspace}-appautoscaling-role"
+  name               = "${var.name}-appautoscaling-role"
   assume_role_policy = file("${path.module}/policies/appautoscaling-role.json")
 }
 
 resource "aws_iam_role_policy" "autoscaling" {
-  name   = "${var.name}-${terraform.workspace}-appautoscaling-policy"
+  name   = "${var.name}-appautoscaling-policy"
   policy = file("${path.module}/policies/appautoscaling-role-policy.json")
   role   = aws_iam_role.autoscaling.id
 }
@@ -463,13 +469,13 @@ resource "aws_appautoscaling_policy" "this" {
 # CODEBUILD
 
 resource "aws_s3_bucket" "this" {
-  bucket        = "${var.name}-${terraform.workspace}-builds"
+  bucket        = "${var.name}-builds"
   acl           = "private"
   force_destroy = true
 }
 
 resource "aws_iam_role" "codebuild" {
-  name               = "${var.name}-${terraform.workspace}-codebuild-role"
+  name               = "${var.name}-codebuild-role"
   assume_role_policy = file("${path.module}/policies/codebuild-role.json")
 }
 
@@ -482,7 +488,7 @@ data "template_file" "codebuild" {
 }
 
 resource "aws_iam_role_policy" "codebuild" {
-  name   = "${var.name}-${terraform.workspace}-codebuild-role-policy"
+  name   = "${var.name}-codebuild-role-policy"
   role   = aws_iam_role.codebuild.id
   policy = data.template_file.codebuild.rendered
 }
@@ -500,7 +506,7 @@ data "template_file" "buildspec" {
 resource "aws_codebuild_project" "this" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name          = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-builds"
+  name          = "${var.name}-${local.services[count.index].name}-builds"
   build_timeout = "10"
   service_role  = aws_iam_role.codebuild.arn
 
@@ -527,7 +533,7 @@ resource "aws_codebuild_project" "this" {
 resource "aws_iam_role" "codepipeline" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-codepipeline-role"
+  name = "${var.name}-${local.services[count.index].name}-codepipeline-role"
 
   assume_role_policy = file("${path.module}/policies/codepipeline-role.json")
 }
@@ -546,7 +552,7 @@ data "template_file" "codepipeline" {
 resource "aws_iam_role_policy" "codepipeline" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name   = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-codepipeline-role-policy"
+  name   = "${var.name}-${local.services[count.index].name}-codepipeline-role-policy"
   role   = aws_iam_role.codepipeline[count.index].id
   policy = data.template_file.codepipeline[count.index].rendered
 }
@@ -554,7 +560,7 @@ resource "aws_iam_role_policy" "codepipeline" {
 resource "aws_codepipeline" "this" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name     = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-pipeline"
+  name     = "${var.name}-${local.services[count.index].name}-pipeline"
   role_arn = aws_iam_role.codepipeline[count.index].arn
 
   artifact_store {
@@ -593,7 +599,7 @@ resource "aws_codepipeline" "this" {
       output_artifacts = ["imagedefinitions"]
 
       configuration = {
-        ProjectName = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-builds"
+        ProjectName = "${var.name}-${local.services[count.index].name}-builds"
       }
     }
   }
@@ -645,7 +651,7 @@ data "template_file" "codepipeline_events_sns" {
 resource "aws_cloudwatch_event_rule" "codepipeline_events" {
   count = var.codepipeline_events_enabled ? 1 : 0
 
-  name        = "${var.name}-${terraform.workspace}-pipeline-events"
+  name        = "${var.name}-pipeline-events"
   description = "Amazon CloudWatch Events rule to automatically post SNS notifications when CodePipeline state changes."
 
   event_pattern = data.template_file.codepipeline_events[count.index].rendered
@@ -654,8 +660,8 @@ resource "aws_cloudwatch_event_rule" "codepipeline_events" {
 resource "aws_sns_topic" "codepipeline_events" {
   count = var.codepipeline_events_enabled ? 1 : 0
 
-  name         = "${var.name}-${terraform.workspace}-codepipeline-events"
-  display_name = "${var.name}-${terraform.workspace}-codepipeline-events"
+  name         = "${var.name}-codepipeline-events"
+  display_name = "${var.name}-codepipeline-events"
 }
 
 resource "aws_sns_topic_policy" "codepipeline_events" {
@@ -670,14 +676,15 @@ resource "aws_cloudwatch_event_target" "codepipeline_events" {
   count = var.codepipeline_events_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.codepipeline_events[count.index].name
-  target_id = "${var.name}-${terraform.workspace}-codepipeline"
+  target_id = "${var.name}-codepipeline"
   arn       = aws_sns_topic.codepipeline_events[count.index].arn
 }
 
 ### CLOUDWATCH BASIC DASHBOARD
 
 data "template_file" "metric_dashboard" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   template = file("${path.module}/metrics/basic-dashboard.json")
 
@@ -690,9 +697,10 @@ data "template_file" "metric_dashboard" {
 }
 
 resource "aws_cloudwatch_dashboard" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
-  dashboard_name = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-metrics-dashboard"
+  dashboard_name = "${var.name}-${local.services[count.index].name}-metrics-dashboard"
 
   dashboard_body = data.template_file.metric_dashboard[count.index].rendered
 }
@@ -700,7 +708,7 @@ resource "aws_cloudwatch_dashboard" "this" {
 resource "aws_iam_role" "events" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-events-role"
+  name = "${var.name}-${local.services[count.index].name}-events-role"
 
   assume_role_policy = file("${path.module}/policies/events-role.json")
 }
@@ -718,7 +726,7 @@ data "template_file" "events" {
 resource "aws_iam_role_policy" "events" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name   = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-events-role-policy"
+  name   = "${var.name}-${local.services[count.index].name}-events-role-policy"
   role   = aws_iam_role.events[count.index].id
   policy = data.template_file.events[count.index].rendered
 }
@@ -736,7 +744,7 @@ data "template_file" "ecr_event" {
 resource "aws_cloudwatch_event_rule" "events" {
   count = local.services_count > 0 ? local.services_count : 0
 
-  name        = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-ecr-event"
+  name        = "${var.name}-${local.services[count.index].name}-ecr-event"
   description = "Amazon CloudWatch Events rule to automatically start your pipeline when a change occurs in the Amazon ECR image tag."
 
   event_pattern = data.template_file.ecr_event[count.index].rendered
@@ -748,7 +756,7 @@ resource "aws_cloudwatch_event_target" "events" {
   count = local.services_count > 0 ? local.services_count : 0
 
   rule      = aws_cloudwatch_event_rule.events[count.index].name
-  target_id = "${var.name}-${terraform.workspace}-${local.services[count.index].name}-codepipeline"
+  target_id = "${var.name}-${local.services[count.index].name}-codepipeline"
   arn       = aws_codepipeline.this[count.index].arn
   role_arn  = aws_iam_role.events[count.index].arn
 }
