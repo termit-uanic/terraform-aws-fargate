@@ -42,8 +42,7 @@ locals {
   services_count = length(var.services)
 
   # ⚠️ remove when https://github.com/hashicorp/terraform/issues/22560 gets fixed
-  services_with_sd = [for s in local.services : s if lookup(s, "service_discovery_enabled", false)]
-  services_with_alb = [for s in local.services : s if lookup(s, "service_alb_enabled", false)]
+  services_with_sd  = [for s in local.services : s if lookup(s, "service_discovery_enabled", false)]
 }
 
 data "aws_availability_zones" "this" {}
@@ -276,8 +275,7 @@ resource "aws_security_group" "services_dynamic" {
 # ALBs
 
 resource "random_id" "target_group_sufix" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
-  #count = local.services_count > 0 ? local.services_count : 0
+  count = local.services_count > 0 ? local.services_count : 0
 
   keepers = {
     container_port = local.services[count.index].container_port
@@ -287,8 +285,7 @@ resource "random_id" "target_group_sufix" {
 }
 
 resource "aws_lb_target_group" "this" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
-  #count = local.services_count > 0 ? local.services_count : 0
+  count = local.services_count > 0 ? local.services_count : 0
 
   name        = "${var.name}-${local.services[count.index].name}-${random_id.target_group_sufix[count.index].hex}"
   port        = random_id.target_group_sufix[count.index].keepers.container_port
@@ -310,7 +307,7 @@ resource "aws_lb_target_group" "this" {
 }
 
 resource "aws_lb" "this" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  count = length(local.services) > 0 ? length(local.services) : 0
   #count = local.services_count > 0 ? local.services_count : 0
 
   name            = "${var.name}-${local.services[count.index].name}-alb"
@@ -319,8 +316,7 @@ resource "aws_lb" "this" {
 }
 
 resource "aws_lb_listener" "this" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
-  //count = local.services_count > 0 ? local.services_count : 0
+  count = local.services_count > 0 ? local.services_count : 0
 
   load_balancer_arn = aws_lb.this[count.index].arn
   port              = lookup(local.services[count.index], "acm_certificate_arn", "") != "" ? 443 : 80
@@ -372,7 +368,7 @@ resource "aws_service_discovery_service" "this" {
 # ECS SERVICES
 
 resource "aws_ecs_service" "this" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  count = length(local.services) > 0 ? length(local.services) : 0
   #count = local.services_count > 0 ? local.services_count : 0
 
   name          = local.services[count.index].name
@@ -431,7 +427,8 @@ resource "aws_iam_role_policy" "autoscaling" {
 }
 
 resource "aws_appautoscaling_target" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services) > 0 ? length(local.services) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   max_capacity       = lookup(local.services[count.index], "auto_scaling_max_replicas", local.services[count.index].replicas)
   min_capacity       = local.services[count.index].replicas
@@ -444,7 +441,8 @@ resource "aws_appautoscaling_target" "this" {
 }
 
 resource "aws_appautoscaling_policy" "this" {
-  count = local.services_count > 0 ? local.services_count : 0
+  count = length(local.services) > 0 ? length(local.services) : 0
+  #count = local.services_count > 0 ? local.services_count : 0
 
   name               = "${local.services[count.index].name}-autoscaling-policy"
   policy_type        = "TargetTrackingScaling"
@@ -683,8 +681,7 @@ resource "aws_cloudwatch_event_target" "codepipeline_events" {
 ### CLOUDWATCH BASIC DASHBOARD
 
 data "template_file" "metric_dashboard" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
-  #count = local.services_count > 0 ? local.services_count : 0
+  count = local.services_count > 0 ? local.services_count : 0
 
   template = file("${path.module}/metrics/basic-dashboard.json")
 
@@ -697,7 +694,7 @@ data "template_file" "metric_dashboard" {
 }
 
 resource "aws_cloudwatch_dashboard" "this" {
-  count = length(local.services_with_alb) > 0 ? length(local.services_with_alb) : 0
+  count = length(local.services) > 0 ? length(local.services) : 0
   #count = local.services_count > 0 ? local.services_count : 0
 
   dashboard_name = "${var.name}-${local.services[count.index].name}-metrics-dashboard"
