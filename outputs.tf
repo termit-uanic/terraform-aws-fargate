@@ -75,6 +75,11 @@ output "web_security_group_arn" {
   value       = aws_security_group.web.arn
 }
 
+output "web_security_group_id" {
+  description = "ARN of Web-facing Security Rule"
+  value       = aws_security_group.web.id
+}
+
 output "web_security_group_ingress" {
   description = "Ingress Rule of Web-facing Security Rule"
   value       = aws_security_group.web.ingress
